@@ -1,138 +1,145 @@
 <?php
-// Contact form handler using PHPMailer (no Composer).
-// Point your form to this file: <form action="/contact_phpmailer.php" method="POST" novalidate>
 
-use PHPMailer\PHPMailer\PHPMailer;
-use PHPMailer\PHPMailer\Exception;
+declare(strict_types=1);
 
-require __DIR__ . '/phpmailer/src/Exception.php';
-require __DIR__ . '/phpmailer/src/PHPMailer.php';
-require __DIR__ . '/phpmailer/src/SMTP.php';
+$to            = 'hasanrafiul32@gmail.com'; 
+$siteName      = 'Droidco';
+$fromAddress   = 'hello@droidco.co';
+$fromName      = 'Droidco Contact';
+$envelopeFrom  = 'hello@droidco.co';
+$subjectPrefix = 'New Contact Form Submission';
 
-// CONFIG — update these
-$TO_EMAIL       = 'hasanrafiul32@gmail.com';       // Where to receive messages
-$FROM_NAME      = 'Droidco';
-$FROM_EMAIL     = 'hasanrafiul32@gmail.com';       // Use the same Gmail you’ll authenticate with (or a verified alias)
-$SUBJECT_PREFIX = 'Droidco Contact';
-
-// Gmail SMTP
-$SMTP_HOST   = 'smtp.gmail.com';
-$SMTP_PORT   = 587;                             // 587 (TLS) or 465 (SSL)
-$SMTP_USER   = 'hasanrafiul32@gmail.com';          // Same as FROM_EMAIL (recommended)
-$SMTP_PASS   = 'bfem kyjk lpqz djch'; // DO NOT commit this; use env in production
-$SMTP_SECURE = 'tls';                           // 'tls' for 587, 'ssl' for 465
-
-// Helpers
-function is_ajax() {
-  return (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest')
-      || (isset($_SERVER['HTTP_ACCEPT']) && strpos($_SERVER['HTTP_ACCEPT'], 'application/json') !== false);
+session_start();
+$now = time();
+if (!isset($_SESSION['last_submit_ts'])) {
+    $_SESSION['last_submit_ts'] = 0;
 }
-function respond($ok, $message) {
-  if (is_ajax()) {
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['success' => $ok, 'message' => $message]);
+$secondsSinceLast = $now - (int)$_SESSION['last_submit_ts'];
+
+function isAjax(): bool {
+    $accept = $_SERVER['HTTP_ACCEPT'] ?? '';
+    $xhr    = $_SERVER['HTTP_X_REQUESTED_WITH'] ?? '';
+    return (stripos($accept, 'application/json') !== false) || (strtolower($xhr) === 'xmlhttprequest') || (strtolower($xhr) === 'fetch');
+}
+
+function respondJson(int $status, array $data): void {
+    http_response_code($status);
+    header('Content-Type: application/json; charset=UTF-8');
+    echo json_encode($data);
     exit;
-  }
-  header('Location: ' . ($ok ? 'index.html?sent=1#contact' : 'index.html#contact'));
-  exit;
-}
-function sanitize_header($v) {
-  return trim(preg_replace('/[\r\n]+/', ' ', (string)$v));
 }
 
-// Health check on GET
-if ($_SERVER['REQUEST_METHOD'] === 'GET') {
-  header('Content-Type: text/plain; charset=utf-8');
-  echo 'OK';
-  exit;
+function respondHtml(int $status, string $message): void {
+    http_response_code($status);
+    header('Content-Type: text/html; charset=UTF-8');
+    $safeMsg = htmlspecialchars($message, ENT_QUOTES, 'UTF-8');
+    echo "<!doctype html><html lang=\"en\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+<title>Contact | {$safeMsg}</title>
+<body style=\"font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; padding: 2rem; color: #e2e8f0; background:#0b0b1a\">
+  <div style=\"max-width: 720px; margin: 0 auto; background:#1f1b3a; padding: 1.5rem; border-radius: 12px; border:1px solid rgba(255,255,255,0.1)\">
+    <p>{$safeMsg}</p>
+    <p><a href=\"/\" style=\"color:#a78bfa; text-decoration: underline\">Back to site</a></p>
+  </div>
+</body></html>";
+    exit;
 }
+
+function finish(bool $ok, string $message): void {
+    if (isAjax()) {
+        respondJson($ok ? 200 : 400, ['ok' => $ok, 'message' => $message]);
+    } else {
+        respondHtml($ok ? 200 : 400, $message);
+    }
+}
+
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-  http_response_code(405);
-  respond(false, 'Method not allowed.');
+    finish(false, 'Invalid request method.');
 }
 
-// Honeypot
-if (!empty($_POST['website'] ?? '')) {
-  respond(true, 'OK');
+if ($secondsSinceLast < 30) {
+    finish(false, 'Please wait a few seconds before sending another message.');
 }
 
-// Inputs
-$name    = trim((string)($_POST['name']    ?? ''));
-$email   = trim((string)($_POST['email']   ?? ''));
-$subject = trim((string)($_POST['subject'] ?? ''));
-$message = trim((string)($_POST['message'] ?? ''));
-$consent = isset($_POST['consent']);
+$honeypot = trim((string)($_POST['website'] ?? '')); // honeypot: should be empty
+$name     = trim((string)($_POST['name'] ?? ''));
+$email    = trim((string)($_POST['email'] ?? ''));
+$subject  = trim((string)($_POST['subject'] ?? ''));
+$message  = trim((string)($_POST['message'] ?? ''));
+$consent  = isset($_POST['consent']);
 
-// Validate
-if ($name === '' || $email === '' || $message === '' || !$consent) {
-  http_response_code(422);
-  respond(false, 'Please complete all required fields.');
-}
-if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-  http_response_code(422);
-  respond(false, 'Please enter a valid email address.');
-}
-if (mb_strlen($name) > 120 || mb_strlen($email) > 160 || mb_strlen($subject) > 160 || mb_strlen($message) > 5000) {
-  http_response_code(422);
-  respond(false, 'One or more fields exceed the maximum length.');
+// Honeypot check: pretend success to avoid tipping off bots
+if ($honeypot !== '') {
+    $_SESSION['last_submit_ts'] = $now;
+    finish(true, 'Thanks! If this were a real submission, we’d be in touch soon.');
 }
 
-// Build content
-$clean_subject = sanitize_header(($SUBJECT_PREFIX ? $SUBJECT_PREFIX . ': ' : '') . ($subject !== '' ? $subject : 'New Inquiry'));
-$ip   = $_SERVER['REMOTE_ADDR']     ?? 'unknown';
-$ua   = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
-$time = date('c');
+// Validate fields
+$errors = [];
+if ($name === '' || mb_strlen($name) < 2 || mb_strlen($name) > 120) {
+    $errors[] = 'Please enter your name (2–120 characters).';
+}
+if (!filter_var($email, FILTER_VALIDATE_EMAIL) || mb_strlen($email) > 160) {
+    $errors[] = 'Please enter a valid email address.';
+}
+if ($message === '' || mb_strlen($message) < 10) {
+    $errors[] = 'Please enter a message (at least 10 characters).';
+}
+if (!$consent) {
+    $errors[] = 'You must agree to be contacted about your inquiry.';
+}
+if (mb_strlen($subject) > 160) {
+    $errors[] = 'Subject is too long (160 characters max).';
+}
 
-$body_text = implode("\r\n", array_filter([
-  "New contact form submission from Droidco.co",
-  "",
-  "Name: {$name}",
-  "Email: {$email}",
-  ($subject !== '' ? "Subject: {$subject}" : null),
-  "",
-  "Message:",
-  $message,
-  "",
-  "—",
-  "Meta:",
-  "IP: {$ip}",
-  "User-Agent: {$ua}",
-  "Time: {$time}",
-]));
+if (!empty($errors)) {
+    finish(false, implode(' ', $errors));
+}
 
-// Send via Gmail SMTP
-try {
-  $mail = new PHPMailer(true);
+$visitorName  = $name;
+$visitorEmail = $email;
+$cleanSubject = $subject !== '' ? $subject : 'Contact via website';
+$ip           = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+$ua           = $_SERVER['HTTP_USER_AGENT'] ?? 'unknown';
+$timeIso      = gmdate('Y-m-d\TH:i:s\Z');
 
-  // For debugging (disable in production):
-  // $mail->SMTPDebug = 2;
-  // $mail->Debugoutput = function($str){ error_log('SMTP: ' . $str); };
+$plainBody = <<<TXT
+You have a new message from the {$siteName} contact form.
 
-  $mail->isSMTP();
-  $mail->Host       = $SMTP_HOST;
-  $mail->SMTPAuth   = true;
-  $mail->Username   = $SMTP_USER;
-  $mail->Password   = $SMTP_PASS;
-  $mail->SMTPSecure = ($SMTP_SECURE === 'ssl') ? PHPMailer::ENCRYPTION_SMTPS : PHPMailer::ENCRYPTION_STARTTLS;
-  $mail->Port       = $SMTP_PORT;
-  $mail->CharSet    = 'UTF-8';
+Name: {$visitorName}
+Email: {$visitorEmail}
+Subject: {$cleanSubject}
 
-  // From must be your Gmail (or a verified alias in Gmail “Send mail as”)
-  $mail->setFrom($FROM_EMAIL, $FROM_NAME);
+Message:
+{$message}
 
-  // Recipient (your inbox)
-  $mail->addAddress($TO_EMAIL);
+---
+Meta:
+IP: {$ip}
+User-Agent: {$ua}
+Time (UTC): {$timeIso}
+TXT;
 
-  // Put the visitor’s address in Reply-To so you can reply directly
-  $mail->addReplyTo($email, $name);
+$encodedFromName = '=?UTF-8?B?' . base64_encode($fromName) . '?=';
+$headers = [];
+$headers[] = "From: {$encodedFromName} <{$fromAddress}>";
+$headers[] = "Reply-To: \"{$visitorName}\" <{$visitorEmail}>";
+$headers[] = "MIME-Version: 1.0";
+$headers[] = "Content-Type: text/plain; charset=UTF-8";
+$headers[] = "X-Mailer: PHP/" . phpversion();
 
-  $mail->Subject = $clean_subject;
-  $mail->Body    = $body_text;
-  $mail->isHTML(false); // plain text
+$headersStr = implode("\r\n", $headers);
 
-  $mail->send();
-  respond(true, 'Thanks! Your message has been sent.');
-} catch (Exception $e) {
-  http_response_code(500);
-  respond(false, 'We could not send your message. Please try again later.');
+$finalSubject = "{$subjectPrefix}: {$cleanSubject}";
+
+$mailOk = false;
+if (function_exists('mail')) {
+    $additionalParams = $envelopeFrom ? "-f {$envelopeFrom}" : '';
+    $mailOk = @mail($to, $finalSubject, $plainBody, $headersStr, $additionalParams);
+}
+
+if ($mailOk) {
+    $_SESSION['last_submit_ts'] = $now;
+    finish(true, 'Thanks! Your message has been sent.');
+} else {
+    finish(false, 'Sorry, we could not send your message at this time. Please email us at hello@droidco.co.');
 }

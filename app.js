@@ -1,12 +1,39 @@
-// Minimal progressive enhancement for contact form
+document.addEventListener('DOMContentLoaded', () => {
+  const cb = document.getElementById('nav-toggle');
+  const label = document.querySelector('label[for="nav-toggle"]');
+  if (cb && label) {
+    const sync = () => label.setAttribute('aria-expanded', cb.checked ? 'true' : 'false');
+    cb.addEventListener('change', sync);
+    sync();
+  }
+
+  const yearEl = document.getElementById('year');
+  if (yearEl) yearEl.textContent = new Date().getFullYear();
+
+  const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const revealEls = document.querySelectorAll('.reveal');
+  if (!prefersReducedMotion && 'IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries, obs) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('in-view');
+          obs.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.15, rootMargin: '0px 0px -40px 0px' });
+    revealEls.forEach(el => io.observe(el));
+  } else {
+    revealEls.forEach(el => el.classList.add('in-view'));
+  }
+});
+
 (function () {
-  const form = document.getElementById('contact');
+  const form = document.getElementById('contactForm');
   const btn = document.getElementById('submitBtn');
   const alertBox = document.getElementById('formAlert');
-  if (!form) return;
 
+  if (!form || !btn || !alertBox) return;
 
-  console.log(form)
   function setAlert(kind, msg) {
     alertBox.className = 'mx-auto mt-6 max-w-3xl rounded-lg border px-4 py-3 text-sm ' +
       (kind === 'ok'
@@ -20,26 +47,26 @@
     const spinner = btn.querySelector('svg');
     if (loading) {
       btn.disabled = true;
-      spinner.classList.remove('hidden');
+      spinner && spinner.classList.remove('hidden');
     } else {
       btn.disabled = false;
-      spinner.classList.add('hidden');
+      spinner && spinner.classList.add('hidden');
     }
   }
 
-  // Show success if redirected with ?sent=1
-  if (new URLSearchParams(location.search).get('sent') === '1') {
-    setAlert('ok', 'Thanks! Your message has been sent. We’ll get back to you shortly.');
-    // Clean URL
-    history.replaceState({}, '', location.pathname + '#contact');
+  try {
+    if (new URLSearchParams(location.search).get('sent') === '1') {
+      setAlert('ok', 'Thanks! Your message has been sent. We’ll get back to you shortly.');
+      history.replaceState({}, '', location.pathname + '#contact');
+    }
+  } catch (_) {
+    // ignore
   }
 
   form.addEventListener('submit', async (e) => {
-    // Use AJAX; if it fails, the browser will still submit traditionally if we don't preventDefault early.
     e.preventDefault();
     alertBox.classList.add('hidden');
 
-    // Basic client-side checks
     const email = form.email.value.trim();
     const name = form.name.value.trim();
     const message = form.message.value.trim();
@@ -54,6 +81,12 @@
       return;
     }
 
+    if (form.website && form.website.value) {
+      setAlert('ok', 'Thanks! Your message has been sent.');
+      form.reset();
+      return;
+    }
+
     const data = new FormData(form);
     setLoading(true);
     try {
@@ -62,17 +95,24 @@
         body: data,
         headers: { 'X-Requested-With': 'XMLHttpRequest' }
       });
+
       const ct = res.headers.get('content-type') || '';
-      if (!res.ok) throw new Error('Server error');
-      const payload = ct.includes('application/json') ? await res.json() : {};
-      if (payload.success) {
-        setAlert('ok', payload.message || 'Thanks! Your message has been sent.');
-        form.reset();
-      } else {
+      let payload = {};
+      if (ct.includes('application/json')) {
+        payload = await res.json();
+      }
+      if (!res.ok) {
+        throw new Error(payload.message || 'Server error. Please try again later.');
+      }
+
+      if (payload.success === false) {
         throw new Error(payload.message || 'Failed to send. Please try again later.');
       }
+
+      setAlert('ok', payload.message || 'Thanks! Your message has been sent.');
+      form.reset();
     } catch (err) {
-      setAlert('err', err.message || 'Something went wrong. Please try again later.');
+      setAlert('err', err?.message || 'Something went wrong. Please try again later.');
     } finally {
       setLoading(false);
     }
